@@ -8,13 +8,16 @@
 
 #include "color.h"
 
-#define BRIGHT_MIN 5
+#define BRIGHT_MIN 10
 #define BRIGHT_MAX 250
 
 #define BRIGHT_START 150
-#define BRIGHT_DIFF_CAPS -20
+#define BRIGHT_DIFF_CAPS -40
 #define BRIGHT_DIFF_FN_A 40
 #define BRIGHT_DIFF_FN_OFF -80
+
+#define BRIGHT_MIN_MAIN 90
+#define BRIGHT_MAX_MAIN 210
 
 #define COLOR_CAPS HSV_ORANGE
 #define COLOR_L0 HSV_WHITE
@@ -51,43 +54,29 @@ const uint16_t PROGMEM encoder_map[][NUM_ENCODERS][NUM_DIRECTIONS] = {
 #    include OTHER_KEYMAP_C
 #endif // OTHER_KEYMAP_C
 
+bool booted = false;
+
+// Initialize brightness-variables
 uint8_t brightMain = BRIGHT_START;
 uint8_t brightCaps = BRIGHT_START + BRIGHT_DIFF_CAPS;
+uint8_t brightFnCaps = BRIGHT_START + BRIGHT_DIFF_FN_OFF;
 uint8_t brightFnA = BRIGHT_START + BRIGHT_DIFF_FN_A;
 uint8_t brightFnOff = BRIGHT_START + BRIGHT_DIFF_FN_OFF;
 
-// uint8_t getBrightness(uint8_t factor) {
-//     const uint8_t p_min = MIN(100, brightPercent);
-//     const uint32_t maxBright = BRIGHT_MAX * 100; // 25000
-//     const uint32_t minBright = BRIGHT_MIN * 100; // 2500
-//     const uint32_t val = (((((maxBright - minBright) * p_min) / 100) + minBright) / 10); //need div10
-//     const uint32_t fVal = (val * factor) / 1000;
-//     return (uint8_t)fVal;
-// }
+uint8_t brightMinMain = BRIGHT_MIN_MAIN;
+uint8_t brightMaxMain = BRIGHT_MAX_MAIN;
 
-const void updateBrightness(int8_t value) {
-    const int16_t bM = brightMain + value;
-    const int16_t bC = brightCaps + value;
-    const int16_t bFa = brightFnA + value;
-    const int16_t bFo = brightFnOff + value;
+// Per-Layer colors
+rgb_t l1Col = {RGB_OFF};
+rgb_t l0Col = {RGB_OFF};
 
-    if(bM < BRIGHT_MIN ||
-        bC < BRIGHT_MIN ||
-        bFa < BRIGHT_MIN ||
-        bFo < BRIGHT_MIN)
-        {return; }
-    if(bM > BRIGHT_MAX ||
-        bC > BRIGHT_MAX ||
-        bFa > BRIGHT_MAX ||
-        bFo > BRIGHT_MAX)
-        {return; }
+rgb_t cFnOn = {RGB_OFF};
+rgb_t cFnOff = {RGB_OFF};
+rgb_t cCaps = {RGB_OFF};
+rgb_t cFnCaps = {RGB_OFF};
 
-        brightMain = (uint8_t)bM;
-        brightCaps = (uint8_t)bC;
-        brightFnA = (uint8_t)bFa;
-        brightFnOff = (uint8_t)bFo;
-}
-
+const rgb_t cSystem = {RGB_CORAL};
+const rgb_t cSystemOff = {RGB_OFF};
 
 rgb_t setColor(uint8_t h, uint8_t s, uint8_t v, uint8_t brightness) {
 
@@ -103,134 +92,155 @@ rgb_t setColor(uint8_t h, uint8_t s, uint8_t v, uint8_t brightness) {
 }
 
 // CAPS - Set all alphanum. to color
-void checkCapsLock(uint8_t led_min, uint8_t led_max, uint8_t brightness) {
-    const rgb_t cc = setColor(COLOR_CAPS, brightCaps);
-
+void checkCapsLock(uint8_t led_min, uint8_t led_max, rgb_t capsCol) {
     if (host_keyboard_led_state().caps_lock) {
         for (uint8_t i = led_min; i < led_max; i++) {
             if (g_led_config.flags[i] & LED_FLAG_KEYLIGHT) {
-                rgb_matrix_set_color(i, cc.r, cc.g, cc.b);
+                rgb_matrix_set_color(i, capsCol.r, capsCol.g, capsCol.b);
             }
         }
     }
 }
 
-// bool encoder_update_user(uint8_t index, bool clockwise) {
-//     if(get_highest_layer(layer_state|default_layer_state) > 1) {
-//     if (index == 0) { /* First encoder */
-//         if (clockwise) {
-//             // brightPercent += 10;
-//             // if(brightPercent > 100) {
-//             //     brightPercent = 100;
-//             // }
-//             // tap_code(KC_PGDN);
-//         } else {
-//             // brightPercent -= 10;
-//             // if(brightPercent < 0) {
-//             //     brightPercent = 0;
-//             // }
-//             // tap_code(KC_PGUP);
-//         }
-//     }
-//     return false;
-// }
-//     return true;
-// }
-
-
-
 
 // ********************************************************************************
 // Force any key with active-state in the current layer to glow
-void setByActiveKeyInLayer(uint8_t led_min, uint8_t led_max,
-    uint8_t h_on,uint8_t s_on, uint8_t v_on, uint8_t b_on,
-    uint8_t h_off, uint8_t s_off, uint8_t v_off, uint8_t b_off) {
-        uint8_t layer = get_highest_layer(layer_state);
+void setByActiveKeyInLayer(uint8_t led_min, uint8_t led_max, rgb_t cOn, rgb_t cOff, rgb_t cCapsDim) {
 
-        const rgb_t cOn = setColor(h_on, s_on, v_on, b_on);
-        const rgb_t cOff = setColor(h_off, s_off, v_off, b_off);
-        const rgb_t cc = setColor(COLOR_CAPS, brightCaps);
+    uint8_t layer = get_highest_layer(layer_state);
 
+    for (uint8_t row = 0; row < MATRIX_ROWS; ++row) {
+        for (uint8_t col = 0; col < MATRIX_COLS; ++col) {
+            uint8_t index = g_led_config.matrix_co[row][col];
 
-        for (uint8_t row = 0; row < MATRIX_ROWS; ++row) {
-            for (uint8_t col = 0; col < MATRIX_COLS; ++col) {
-                uint8_t index = g_led_config.matrix_co[row][col];
+            if (index >= led_min && index < led_max && index != NO_LED) {
 
-                if (index >= led_min && index < led_max && index != NO_LED) {
-
-                    if(keymap_key_to_keycode(layer, (keypos_t){col,row}) > KC_TRNS) {
-                        rgb_matrix_set_color(index, cOn.r, cOn.g, cOn.b);
-                    }
-                    else if(keymap_key_to_keycode(layer, (keypos_t){col,row}) < KC_TRNS) {
-                        if (!host_keyboard_led_state().caps_lock) {
-                        rgb_matrix_set_color(index, cOff.r, cOff.g, cOff.b);
-                    }
-                    else
-                    if (g_led_config.flags[index] & LED_FLAG_KEYLIGHT) {
-                        rgb_matrix_set_color(index, cc.r, cc.g, cc.b);
-                    }
-                    }
+                if(keymap_key_to_keycode(layer, (keypos_t){col,row}) > KC_TRNS) {
+                    rgb_matrix_set_color(index, cOn.r, cOn.g, cOn.b);
+                }
+                else if(keymap_key_to_keycode(layer, (keypos_t){col,row}) < KC_TRNS) {
+                    if (!host_keyboard_led_state().caps_lock) {
+                    rgb_matrix_set_color(index, cOff.r, cOff.g, cOff.b);
+                }
+                else
+                {
+                    rgb_matrix_set_color(index, cCapsDim.r, cCapsDim.g, cCapsDim.b);
+                }
                 }
             }
         }
+    }
 }
 
-// continously
 
+const void updateBrightness(int8_t value) {
+    const int16_t bM = brightMain + value;
+    const int16_t bC = bM + BRIGHT_DIFF_CAPS;
+    const int16_t bFc = bM + BRIGHT_DIFF_FN_OFF;
+    const int16_t bFa = bM + BRIGHT_DIFF_FN_A;
+    const int16_t bFo = bM + BRIGHT_DIFF_FN_OFF;
+
+    if(bM < BRIGHT_MIN ||
+        bC < BRIGHT_MIN ||
+        bFa < BRIGHT_MIN ||
+        bFo < BRIGHT_MIN ||
+        bFc < BRIGHT_MIN)
+        {return; }
+    if(bM > BRIGHT_MAX ||
+        bC > BRIGHT_MAX ||
+        bFa > BRIGHT_MAX ||
+        bFo > BRIGHT_MAX ||
+        bFc > BRIGHT_MAX)
+        {return; }
+
+        brightMain = (uint8_t)bM;
+        brightCaps = (uint8_t)bC;
+        brightFnCaps = (uint8_t)bFc;
+        brightFnA = (uint8_t)bFa;
+        brightFnOff = (uint8_t)bFo;
+
+        l1Col = setColor(COLOR_L1, brightMain);
+        l0Col = setColor(COLOR_L0, brightMain);
+
+        cFnOn = setColor(COLOR_FN_A, brightFnA);
+        cFnOff = setColor(COLOR_L1, brightFnOff);
+        cCaps = setColor(COLOR_CAPS, brightCaps);
+        cFnCaps = setColor(COLOR_CAPS, brightFnCaps);
+}
+
+const void brightnessIndicator(uint8_t led_min, uint8_t led_max) {
+    // Min 90, Max 210 (span 120)
+
+    const int32_t valP = (((brightMain - brightMinMain) + 2) * 100) / (brightMaxMain - brightMinMain);
+    const uint8_t testVal = valP / 10;
+
+    for (uint8_t i = 0; i < 10; i++) {
+        if(testVal >= i)
+        {
+            const uint8_t li = i + 1;
+            if(li >= led_min && li < led_max) {
+            rgb_matrix_set_color(li, cFnOn.r, cFnOn.g, cFnOn.b);
+        }
+        }
+    }
+}
+
+
+void keyboard_post_init_user(void) {
+    if(!booted) {
+        updateBrightness(0);
+        booted = true;
+    }
+  }
+
+// continously
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     if(get_highest_layer(layer_state|default_layer_state) > 1) {
         switch (keycode) {
         case RGB_VAI:
             updateBrightness(5);
-            // Do not let QMK process the keycode further
-            return false;
+            return false; // Stop QMK-processing
             break;
 
         case RGB_VAD:
-        updateBrightness(-5);
-            // Do not let QMK process the keycode further
-            return false;
+            updateBrightness(-5);
+            return false; // Stop QMK-processing
             break;
         default:
-            // Else, let QMK process the KC_ESC keycode as usual
-            return true;
+            return true; // Let QMK process it
         }
     }
+
     return true;
 };
 
-
 bool rgb_matrix_indicators_advanced_user(uint8_t led_min, uint8_t led_max) {
-
-    // Per-Layer
-    const rgb_t l1Col = setColor(COLOR_L1, brightMain);
-    const rgb_t l0Col = setColor(COLOR_L0, brightMain);
-
     for (uint8_t i = led_min; i < led_max; i++) {
         switch(get_highest_layer(layer_state|default_layer_state)) {
             case 6:
-                setByActiveKeyInLayer(led_min, led_max, COLOR_SYS, BRIGHT_MAX, HSV_OFF, 0);
+                setByActiveKeyInLayer(led_min, led_max, cSystem, cSystemOff, cFnCaps);
                 break;
             case 5:
-                setByActiveKeyInLayer(led_min, led_max, COLOR_SYS, BRIGHT_MAX, HSV_OFF, 0);
+                setByActiveKeyInLayer(led_min, led_max, cSystem, cSystemOff, cFnCaps);
+                brightnessIndicator(led_min, led_max);
                 break;
             case 4:
-                setByActiveKeyInLayer(led_min, led_max, COLOR_FN_A, brightFnA, COLOR_L1, brightFnOff);
+                setByActiveKeyInLayer(led_min, led_max, cFnOn, cFnOff, cFnCaps);
                 break;
             case 3:
-                setByActiveKeyInLayer(led_min, led_max, COLOR_FN_A, brightFnA, COLOR_L1, brightFnOff);
+                setByActiveKeyInLayer(led_min, led_max, cFnOn, cFnOff, cFnCaps);
                 break;
             case 2:
-                setByActiveKeyInLayer(led_min, led_max, COLOR_FN_A, brightFnA, COLOR_L1, brightFnOff);
+                setByActiveKeyInLayer(led_min, led_max, cFnOn, cFnOff, cFnCaps);
                 break;
             case 1:
                 rgb_matrix_set_color(i, l1Col.r, l1Col.g, l1Col.b);
-                checkCapsLock(led_min, led_max, brightCaps);
+                checkCapsLock(led_min, led_max, cCaps);
                 break;
             case 0:
 
                 rgb_matrix_set_color(i, l0Col.r, l0Col.g, l0Col.b);
-                checkCapsLock(led_min, led_max, brightCaps);
+                checkCapsLock(led_min, led_max, cCaps);
                 break;
             default:
                 break;
